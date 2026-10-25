@@ -7,8 +7,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Anis El Kandoussi — Portfolio cartographie</title>
   <meta name="description" content="Portfolio de cartographie et webmapping : cartes interactives, analyses spatiales.">
-  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.0.0/dist/maplibre-gl.css">
-  <script src="https://unpkg.com/maplibre-gl@5.0.0/dist/maplibre-gl.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css">
+  <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
   <!-- Bibliothèque qui calcule la position des satellites à partir de leurs paramètres orbitaux -->
   <script src="https://cdn.jsdelivr.net/npm/satellite.js@5.0.0/dist/satellite.min.js"></script>
   <!-- Police Geist (Google Fonts) -->
@@ -107,7 +107,8 @@
     <div class="conteneur">
       <p>© 2026 Anis El Kandoussi — site hébergé sur GitHub Pages</p>
       <p class="pied__note">En fond : positions réelles de satellites, calculées en direct à partir des données
-         <a href="https://celestrak.org" target="_blank" rel="noopener">CelesTrak</a>.</p>
+         <a href="https://celestrak.org" target="_blank" rel="noopener">CelesTrak</a>.
+         Fiches pays : <a href="https://www.wikidata.org" target="_blank" rel="noopener">Wikidata</a>.</p>
     </div>
   </footer>
 
@@ -140,22 +141,51 @@
 
     // ===== 4. Satellites réels =====
     // CelesTrak publie les paramètres orbitaux (appelés "TLE") des satellites.
-    // Le groupe "stations" contient l'ISS, la station chinoise Tiangong et quelques autres.
-    const URL_TLE = 'https://celestrak.org/NORAD/elements/gp.php?GROUP=stations&FORMAT=tle';
-    const NB_SATELLITES = 15;   // peu de satellites, pour rester discret
-    let satellites = [];        // liste des satellites { nom, orbite }
+    // Le groupe "visual" contient une centaine de satellites parmi les plus brillants,
+    // répartis sur des orbites différentes (contrairement au groupe "stations",
+    // où beaucoup d'objets sont des morceaux de la même station, donc superposés).
+    const URL_TLE = 'https://celestrak.org/NORAD/elements/gp.php?GROUP=visual&FORMAT=tle';
+    const NB_SATELLITES = 25;            // peu de satellites, pour rester discret
+    const CLE_CACHE = 'tle-satellites';  // nom de la mémoire du navigateur où l'on garde les données
+    const DUREE_CACHE = 2 * 60 * 60 * 1000;  // 2 heures : CelesTrak bloque les téléchargements plus fréquents
+    let satellites = [];                 // liste des satellites { nom, orbite }
 
     // Lit le texte des TLE : 3 lignes par satellite (nom, ligne 1, ligne 2)
     function lireTLE(texte) {
       const lignes = texte.trim().split('\n').map(l => l.trim());
       const liste = [];
       for (let i = 0; i + 2 < lignes.length; i += 3) {
+        // Vérification : un vrai TLE a une ligne qui commence par "1 " puis une par "2 "
+        if (!lignes[i + 1].startsWith('1 ') || !lignes[i + 2].startsWith('2 ')) continue;
         liste.push({
           nom: lignes[i],
           orbite: satellite.twoline2satrec(lignes[i + 1], lignes[i + 2])
         });
       }
       return liste;
+    }
+
+    // Récupère les TLE : depuis la mémoire du navigateur s'ils ont moins de 2 heures,
+    // sinon depuis CelesTrak (et on les mémorise pour la prochaine fois)
+    function obtenirTLE() {
+      try {
+        const memoire = JSON.parse(localStorage.getItem(CLE_CACHE));
+        if (memoire && Date.now() - memoire.date < DUREE_CACHE) {
+          return Promise.resolve(memoire.texte);
+        }
+      } catch (e) { /* mémoire indisponible ou illisible : on télécharge */ }
+
+      return fetch(URL_TLE)
+        .then(reponse => {
+          if (!reponse.ok) throw new Error('CelesTrak a répondu ' + reponse.status);
+          return reponse.text();
+        })
+        .then(texte => {
+          try {
+            localStorage.setItem(CLE_CACHE, JSON.stringify({ date: Date.now(), texte }));
+          } catch (e) { /* pas grave si on ne peut pas mémoriser */ }
+          return texte;
+        });
     }
 
     // Calcule la position actuelle de chaque satellite et renvoie des points GeoJSON
@@ -183,10 +213,11 @@
     }
 
     function chargerSatellites() {
-      fetch(URL_TLE)
-        .then(reponse => reponse.text())
+      obtenirTLE()
         .then(texte => {
           satellites = lireTLE(texte).slice(0, NB_SATELLITES);
+          console.info(satellites.length + ' satellites chargés');   // visible dans la Console (F12)
+          if (satellites.length === 0) throw new Error('aucun satellite valide dans les données reçues');
 
           // Une source de données et une couche de petits points discrets
           map.addSource('satellites', { type: 'geojson', data: positionsActuelles() });
@@ -196,8 +227,9 @@
             source: 'satellites',
             paint: {
               'circle-radius': 2.5,
-              'circle-color': '#3fb68e',
-              'circle-opacity': 0.9
+              'circle-color': '#e6e8eb',    // blanc cassé : se distingue des frontières vertes
+              'circle-opacity': 0.9,
+              'circle-blur': 0.3            // léger halo
             }
           });
 
@@ -242,61 +274,81 @@
       map.setFilter('pays-choisi', filtre);
     }
 
-    // Formate un nombre à la française : 203 000 000 -> "203 000 000"
-    const nombre = n => n.toLocaleString('fr-FR');
+    // Formate un nombre à la française : 203000000 -> "203 000 000"
+    const nombre = n => Math.round(n).toLocaleString('fr-FR');
 
-    // Traduit un code de langue ou de monnaie en français grâce au navigateur (Intl)
-    function enFrancais(type, code, nomAnglais) {
-      try {
-        const traduction = new Intl.DisplayNames(['fr'], { type }).of(code);
-        return traduction && traduction !== code ? traduction : nomAnglais;
-      } catch (e) {
-        return nomAnglais;   // code inconnu du navigateur : on garde le nom anglais
-      }
+    // Les informations viennent de Wikidata, la base de connaissances libre liée à Wikipédia.
+    // Elle est gratuite, sans clé d'accès, et donne directement les noms en français.
+    // On l'interroge avec SPARQL, un langage de requête pour ce type de base.
+    function requeteSPARQL(codeISO) {
+      return `
+        SELECT ?nom ?drapeau
+          (MAX(?pop) AS ?population) (MAX(?sup) AS ?superficie)
+          (GROUP_CONCAT(DISTINCT ?nomCapitale; separator=", ") AS ?capitale)
+          (GROUP_CONCAT(DISTINCT ?nomLangue; separator=", ") AS ?langues)
+          (GROUP_CONCAT(DISTINCT ?nomMonnaie; separator=", ") AS ?monnaies)
+        WHERE {
+          ?pays wdt:P298 "${codeISO}" ;        # code pays à 3 lettres
+                wdt:P31 wd:Q3624078 ;          # uniquement les États souverains
+                rdfs:label ?nom .
+          FILTER(LANG(?nom) = "fr")
+          OPTIONAL { ?pays wdt:P41 ?drapeau . }
+          OPTIONAL { ?pays wdt:P1082 ?pop . }   # population
+          OPTIONAL { ?pays wdt:P2046 ?sup . }   # superficie (km²)
+          OPTIONAL { ?pays wdt:P36 ?c . ?c rdfs:label ?nomCapitale . FILTER(LANG(?nomCapitale) = "fr") }
+          OPTIONAL { ?pays wdt:P37 ?l . ?l rdfs:label ?nomLangue . FILTER(LANG(?nomLangue) = "fr") }
+          OPTIONAL { ?pays wdt:P38 ?m . ?m rdfs:label ?nomMonnaie . FILTER(LANG(?nomMonnaie) = "fr") }
+        }
+        GROUP BY ?nom ?drapeau
+        LIMIT 1`;
     }
 
-    // Interroge l'API REST Countries à une adresse donnée
-    function demanderAPI(chemin) {
-      const champs = 'fields=name,translations,flags,capital,population,area,languages,currencies';
-      return fetch('https://restcountries.com/v3.1/' + chemin + '?' + champs)
+    // Demande les informations d'un pays à Wikidata
+    function chercherInfos(pays) {
+      if (!/^[A-Z]{3}$/.test(pays.valeur)) {
+        return Promise.reject(new Error('pas de code à 3 lettres pour ' + pays.valeur));
+      }
+      const url = 'https://query.wikidata.org/sparql?format=json&query='
+                + encodeURIComponent(requeteSPARQL(pays.valeur));
+
+      return fetch(url, { headers: { Accept: 'application/sparql-results+json' } })
         .then(reponse => {
-          if (!reponse.ok) throw new Error('Pays introuvable : ' + chemin);
+          if (!reponse.ok) throw new Error('Wikidata a répondu ' + reponse.status);
           return reponse.json();
         })
-        .then(donnees => Array.isArray(donnees) ? donnees[0] : donnees);
-    }
-
-    // Cherche d'abord par code à 3 lettres ; si ça échoue, réessaie avec le nom du pays
-    function chercherInfos(pays) {
-      const parNom = () => demanderAPI('name/' + encodeURIComponent(pays.nom));
-      if (/^[A-Z]{3}$/.test(pays.valeur)) {
-        return demanderAPI('alpha/' + pays.valeur).catch(parNom);
-      }
-      return parNom();
+        .then(donnees => {
+          const r = donnees.results.bindings[0];   // première (et seule) réponse
+          if (!r) throw new Error('aucune information pour ' + pays.valeur);
+          const valeur = champ => (r[champ] ? r[champ].value : '');
+          return {
+            nom: valeur('nom'),
+            drapeau: valeur('drapeau'),
+            capitale: valeur('capitale'),
+            population: Number(valeur('population')),
+            superficie: Number(valeur('superficie')),
+            langues: valeur('langues'),
+            monnaies: valeur('monnaies')
+          };
+        });
     }
 
     // Remplit et affiche la fiche
     function afficherFiche(infos) {
       const fiche = document.getElementById('fiche-pays');
-      const nom = infos.translations?.fra?.common || infos.name.common;
 
-      fiche.querySelector('.fiche-pays__nom').textContent = nom;
+      fiche.querySelector('.fiche-pays__nom').textContent = infos.nom;
       const drapeau = fiche.querySelector('.fiche-pays__drapeau');
-      drapeau.src = infos.flags.svg;
-      drapeau.alt = 'Drapeau : ' + nom;
-
-      const langues = Object.entries(infos.languages || {})
-        .map(([code, nomAnglais]) => enFrancais('language', code, nomAnglais));
-      const monnaies = Object.entries(infos.currencies || {})
-        .map(([code, m]) => enFrancais('currency', code, m.name));
+      // "?width=60" demande à Wikimedia une petite image, plus rapide à charger
+      drapeau.src = infos.drapeau ? infos.drapeau.replace('http://', 'https://') + '?width=60' : '';
+      drapeau.alt = 'Drapeau : ' + infos.nom;
 
       // Chaque ligne de la fiche : [intitulé, valeur]
       const lignes = [
-        ['Capitale', (infos.capital || ['—']).join(', ')],
-        ['Population', nombre(infos.population)],
-        ['Superficie', nombre(infos.area) + ' km²'],
-        ['Langue', langues.join(', ') || '—'],
-        ['Monnaie', monnaies.join(', ') || '—']
+        ['Capitale', infos.capitale || '—'],
+        ['Population', infos.population ? nombre(infos.population) : '—'],
+        ['Superficie', infos.superficie ? nombre(infos.superficie) + ' km²' : '—'],
+        ['Langue', infos.langues || '—'],
+        ['Monnaie', infos.monnaies || '—']
       ];
 
       // On reconstruit la liste <dl> : un <dt> (intitulé) et un <dd> (valeur) par ligne
@@ -317,20 +369,21 @@
       document.getElementById('fiche-pays').classList.remove('est-visible');
     }
 
-    // Tire au sort un pays parmi ceux visibles, puis le colore et affiche sa fiche
-    function tirerPays() {
+    // Tire au sort un pays parmi ceux visibles, puis le colore et affiche sa fiche.
+    // Si ses informations sont introuvables (petit territoire, par exemple),
+    // on réessaie avec un autre pays, jusqu'à 5 fois.
+    function tirerPays(exclus = new Set(), essai = 1) {
       // Liste des pays visibles, sans doublons (un pays peut être découpé en plusieurs morceaux)
       const candidats = new Map();
       paysVisibles().forEach(f => {
         const cle = trouverCle(f.properties);
-        const nom = f.properties.NAME || f.properties.name || f.properties.ADMIN || f.properties[cle];
-        if (cle) candidats.set(f.properties[cle], { cle, nom });
+        if (cle && !exclus.has(f.properties[cle])) candidats.set(f.properties[cle], cle);
       });
       if (candidats.size === 0) return;   // rien de chargé pour l'instant : on réessaiera
 
       const valeurs = [...candidats.keys()];
       const valeur = valeurs[Math.floor(Math.random() * valeurs.length)];
-      const pays = { cle: candidats.get(valeur).cle, nom: candidats.get(valeur).nom, valeur };
+      const pays = { cle: candidats.get(valeur), valeur };
 
       paysChoisi = pays;
       dernierTirage = Date.now();
@@ -340,7 +393,16 @@
         .then(infos => {
           if (paysChoisi === pays) afficherFiche(infos);   // le pays est-il toujours celui choisi ?
         })
-        .catch(erreur => console.warn('Fiche pays non chargée :', erreur));
+        .catch(erreur => {
+          console.info('Pas de fiche pour ' + valeur + ' :', erreur.message);
+          if (paysChoisi !== pays) return;   // entre-temps, le pays a déjà été remplacé
+          colorerPays(null);
+          paysChoisi = null;
+          if (essai < 5) {
+            exclus.add(valeur);
+            tirerPays(exclus, essai + 1);    // nouvel essai avec un autre pays
+          }
+        });
     }
 
     // Vérification toutes les demi-secondes

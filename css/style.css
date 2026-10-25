@@ -201,7 +201,9 @@ code {
 }
 .fiche-pays__drapeau {
   width: 28px;
-  height: auto;
+  height: 19px;
+  object-fit: cover;            /* le drapeau remplit son cadre sans être déformé */
+  overflow: hidden;
   border-radius: 2px;
 }
 .fiche-pays__nom { font-size: 1rem; }
