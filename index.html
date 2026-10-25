@@ -236,6 +236,16 @@
     // Formate un nombre à la française : 203000000 -> "203 000 000"
     const nombre = n => Math.round(n).toLocaleString('fr-FR');
 
+    // Met une majuscule au début de chaque élément d'une liste séparée par des virgules :
+    // "portugais, espagnol" -> "Portugais, Espagnol"
+    // Wikidata écrit les langues et les monnaies en minuscules, comme le veut le français courant.
+    function majuscules(liste) {
+      return liste
+        .split(', ')                                                  // découpe en éléments
+        .map(mot => mot.charAt(0).toLocaleUpperCase('fr-FR') + mot.slice(1))  // 1re lettre en majuscule
+        .join(', ');                                                  // recolle avec des virgules
+    }
+
     // Les informations viennent de Wikidata, la base de connaissances libre liée à Wikipédia.
     // Elle est gratuite, sans clé d'accès, et donne directement les noms en français.
     // On l'interroge avec SPARQL, un langage de requête pour ce type de base.
@@ -306,8 +316,8 @@
         ['Capitale', infos.capitale || '—'],
         ['Population', infos.population ? nombre(infos.population) : '—'],
         ['Superficie', infos.superficie ? nombre(infos.superficie) + ' km²' : '—'],
-        ['Langue', infos.langues || '—'],
-        ['Monnaie', infos.monnaies || '—']
+        ['Langue', infos.langues ? majuscules(infos.langues) : '—'],
+        ['Monnaie', infos.monnaies ? majuscules(infos.monnaies) : '—']
       ];
 
       // On reconstruit la liste <dl> : un <dt> (intitulé) et un <dd> (valeur) par ligne
