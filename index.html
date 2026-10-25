@@ -9,8 +9,6 @@
   <meta name="description" content="Portfolio de cartographie et webmapping : cartes interactives, analyses spatiales.">
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css">
   <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
-  <!-- Bibliothèque qui calcule la position des satellites à partir de leurs paramètres orbitaux -->
-  <script src="https://cdn.jsdelivr.net/npm/satellite.js@5.0.0/dist/satellite.min.js"></script>
   <!-- Police Geist (Google Fonts) -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -106,9 +104,7 @@
   <footer class="pied">
     <div class="conteneur">
       <p>© 2026 Anis El Kandoussi — site hébergé sur GitHub Pages</p>
-      <p class="pied__note">En fond : positions réelles de satellites, calculées en direct à partir des données
-         <a href="https://celestrak.org" target="_blank" rel="noopener">CelesTrak</a>.
-         Fiches pays : <a href="https://www.wikidata.org" target="_blank" rel="noopener">Wikidata</a>.</p>
+      <p class="pied__note">Fiches pays : données <a href="https://www.wikidata.org" target="_blank" rel="noopener">Wikidata</a>.</p>
     </div>
   </footer>
 
@@ -139,109 +135,7 @@
       requestAnimationFrame(tourner);
     }
 
-    // ===== 4. Satellites réels =====
-    // CelesTrak publie les paramètres orbitaux (appelés "TLE") des satellites.
-    // Le groupe "visual" contient une centaine de satellites parmi les plus brillants,
-    // répartis sur des orbites différentes (contrairement au groupe "stations",
-    // où beaucoup d'objets sont des morceaux de la même station, donc superposés).
-    const URL_TLE = 'https://celestrak.org/NORAD/elements/gp.php?GROUP=visual&FORMAT=tle';
-    const NB_SATELLITES = 25;            // peu de satellites, pour rester discret
-    const CLE_CACHE = 'tle-satellites';  // nom de la mémoire du navigateur où l'on garde les données
-    const DUREE_CACHE = 2 * 60 * 60 * 1000;  // 2 heures : CelesTrak bloque les téléchargements plus fréquents
-    let satellites = [];                 // liste des satellites { nom, orbite }
-
-    // Lit le texte des TLE : 3 lignes par satellite (nom, ligne 1, ligne 2)
-    function lireTLE(texte) {
-      const lignes = texte.trim().split('\n').map(l => l.trim());
-      const liste = [];
-      for (let i = 0; i + 2 < lignes.length; i += 3) {
-        // Vérification : un vrai TLE a une ligne qui commence par "1 " puis une par "2 "
-        if (!lignes[i + 1].startsWith('1 ') || !lignes[i + 2].startsWith('2 ')) continue;
-        liste.push({
-          nom: lignes[i],
-          orbite: satellite.twoline2satrec(lignes[i + 1], lignes[i + 2])
-        });
-      }
-      return liste;
-    }
-
-    // Récupère les TLE : depuis la mémoire du navigateur s'ils ont moins de 2 heures,
-    // sinon depuis CelesTrak (et on les mémorise pour la prochaine fois)
-    function obtenirTLE() {
-      try {
-        const memoire = JSON.parse(localStorage.getItem(CLE_CACHE));
-        if (memoire && Date.now() - memoire.date < DUREE_CACHE) {
-          return Promise.resolve(memoire.texte);
-        }
-      } catch (e) { /* mémoire indisponible ou illisible : on télécharge */ }
-
-      return fetch(URL_TLE)
-        .then(reponse => {
-          if (!reponse.ok) throw new Error('CelesTrak a répondu ' + reponse.status);
-          return reponse.text();
-        })
-        .then(texte => {
-          try {
-            localStorage.setItem(CLE_CACHE, JSON.stringify({ date: Date.now(), texte }));
-          } catch (e) { /* pas grave si on ne peut pas mémoriser */ }
-          return texte;
-        });
-    }
-
-    // Calcule la position actuelle de chaque satellite et renvoie des points GeoJSON
-    function positionsActuelles() {
-      const maintenant = new Date();
-      const tempsSideral = satellite.gstime(maintenant);
-      const points = [];
-
-      satellites.forEach(sat => {
-        const pv = satellite.propagate(sat.orbite, maintenant);
-        if (!pv.position) return;   // calcul impossible pour ce satellite : on l'ignore
-
-        const geo = satellite.eciToGeodetic(pv.position, tempsSideral);
-        points.push({
-          type: 'Feature',
-          properties: { nom: sat.nom },
-          geometry: {
-            type: 'Point',
-            coordinates: [satellite.degreesLong(geo.longitude), satellite.degreesLat(geo.latitude)]
-          }
-        });
-      });
-
-      return { type: 'FeatureCollection', features: points };
-    }
-
-    function chargerSatellites() {
-      obtenirTLE()
-        .then(texte => {
-          satellites = lireTLE(texte).slice(0, NB_SATELLITES);
-          console.info(satellites.length + ' satellites chargés');   // visible dans la Console (F12)
-          if (satellites.length === 0) throw new Error('aucun satellite valide dans les données reçues');
-
-          // Une source de données et une couche de petits points discrets
-          map.addSource('satellites', { type: 'geojson', data: positionsActuelles() });
-          map.addLayer({
-            id: 'satellites',
-            type: 'circle',
-            source: 'satellites',
-            paint: {
-              'circle-radius': 2.5,
-              'circle-color': '#e6e8eb',    // blanc cassé : se distingue des frontières vertes
-              'circle-opacity': 0.9,
-              'circle-blur': 0.3            // léger halo
-            }
-          });
-
-          // Mise à jour des positions toutes les secondes
-          setInterval(() => {
-            map.getSource('satellites').setData(positionsActuelles());
-          }, 1000);
-        })
-        .catch(erreur => console.warn('Satellites non chargés :', erreur));
-    }
-
-    // ===== 5. Pays mis en avant au hasard =====
+    // ===== 4. Pays mis en avant au hasard =====
     const COULEUR_PAYS = '#e07a3f';  // orange : la couleur d'accent du site
     const DELAI_MIN = 60 * 1000;     // au moins 1 minute (en millisecondes) entre deux tirages
 
@@ -442,7 +336,7 @@
       setInterval(surveillerPays, 500);
     }
 
-    // ===== 6. Quand la carte est chargée : couleurs, pays, satellites, rotation =====
+    // ===== 5. Quand la carte est chargée : couleurs, pays, rotation =====
     map.on('load', () => {
       // On parcourt toutes les couches du fond de carte
       // et on change leur couleur selon leur type
@@ -463,7 +357,6 @@
       });
 
       preparerPaysChoisi();
-      chargerSatellites();
 
       // Pas de rotation si le visiteur a demandé à réduire les animations
       if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
