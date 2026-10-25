@@ -18,6 +18,12 @@
 <body>
   <div id="globe"></div>
 
+  <!-- Trait qui relie la fiche au pays choisi (redessiné à chaque image par le JavaScript) -->
+  <svg id="ligne-pays" class="ligne-pays" aria-hidden="true">
+    <polyline points="" />
+    <circle r="4" />
+  </svg>
+
   <!-- Fiche du pays mis en avant sur le globe (remplie par le JavaScript en bas de page) -->
   <aside id="fiche-pays" class="fiche-pays" aria-live="polite" aria-label="Pays mis en avant sur le globe">
     <div class="fiche-pays__entete">
@@ -151,6 +157,8 @@
     const DELAI_MIN = 60 * 1000;     // au moins 1 minute (en millisecondes) entre deux tirages
 
     let couchePays = null;           // nom de la couche des pays dans le fond de carte
+    let sourcePays = null;           // source de données de cette couche
+    let sourceLayerPays = null;      // et sa "sous-couche" dans les tuiles vectorielles
     let paysChoisi = null;           // { cle, valeur } du pays actuellement mis en avant
     let dernierTirage = -Infinity;   // moment du dernier tirage (-Infinity : jamais)
     let enChargement = false;        // vrai pendant qu'on attend la réponse de Wikidata
@@ -169,15 +177,60 @@
       return map.queryRenderedFeatures({ layers: [couchePays] });
     }
 
-    // Le pays choisi est-il encore à l'écran ?
-    function estVisible(pays) {
-      return paysVisibles().some(f => f.properties[pays.cle] === pays.valeur);
+    // Un point [lng, lat] est-il sur la face visible du globe ?
+    // On calcule l'angle entre ce point et le centre de la carte (formule de trigonométrie sphérique) :
+    // au-delà d'environ 80°, le point passe derrière la Terre.
+    function surFaceVisible([lng, lat]) {
+      const c = map.getCenter();
+      const r = Math.PI / 180;   // conversion degrés -> radians
+      const cosAngle = Math.sin(lat * r) * Math.sin(c.lat * r)
+                     + Math.cos(lat * r) * Math.cos(c.lat * r) * Math.cos((lng - c.lng) * r);
+      return cosAngle > 0.15;
     }
 
-    // Colore un pays en orange (ou aucun pays si on passe null)
+    // Le pays choisi est-il encore à l'écran ?
+    // On regarde son point d'ancrage (là où arrive le trait) : face visible ET dans l'écran.
+    function estVisible(pays) {
+      if (!surFaceVisible(pays.ancre)) return false;
+      const p = map.project(pays.ancre);
+      return p.x >= 0 && p.x <= window.innerWidth && p.y >= 0 && p.y <= window.innerHeight;
+    }
+
+    // Récupère la forme complète d'un pays (tous ses morceaux) dans les données du fond de carte
+    function morceauxDuPays(pays) {
+      let morceaux = map.querySourceFeatures(sourcePays, {
+        sourceLayer: sourceLayerPays,
+        filter: ['==', ['get', pays.cle], pays.valeur]
+      });
+      // Solution de secours : les morceaux actuellement dessinés à l'écran
+      if (morceaux.length === 0) {
+        morceaux = paysVisibles().filter(f => f.properties[pays.cle] === pays.valeur);
+      }
+      return morceaux.map(f => f.geometry);
+    }
+
+    // Point d'ancrage : le centre du plus grand morceau du pays
+    function calculerAncre(morceaux) {
+      let meilleur = null;
+      let taille = -1;
+      morceaux.forEach(g => {
+        const contours = g.type === 'MultiPolygon' ? g.coordinates.map(poly => poly[0]) : [g.coordinates[0]];
+        contours.forEach(contour => {
+          if (contour.length > taille) { taille = contour.length; meilleur = contour; }
+        });
+      });
+      const lng = meilleur.reduce((somme, p) => somme + p[0], 0) / meilleur.length;
+      const lat = meilleur.reduce((somme, p) => somme + p[1], 0) / meilleur.length;
+      return [lng, lat];
+    }
+
+    // Colore un pays en orange (ou aucun pays si on passe null) :
+    // on copie sa forme dans une source GeoJSON dédiée, affichée par-dessus le fond de carte
     function colorerPays(pays) {
-      const filtre = pays ? ['==', ['get', pays.cle], pays.valeur] : ['==', ['get', 'aucun'], 'aucun'];
-      map.setFilter('pays-choisi', filtre);
+      const elements = pays
+        ? pays.morceaux.map(g => ({ type: 'Feature', properties: {}, geometry: g }))
+        : [];
+      map.getSource('pays-choisi').setData({ type: 'FeatureCollection', features: elements });
     }
 
     // Formate un nombre à la française : 203000000 -> "203 000 000"
@@ -273,6 +326,7 @@
 
     function masquerFiche() {
       document.getElementById('fiche-pays').classList.remove('est-visible');
+      document.getElementById('ligne-pays').classList.remove('est-visible');
     }
 
     // Point représentatif d'un pays : la moyenne des sommets de son premier contour
@@ -315,6 +369,10 @@
       const liste = aDroite.length > 0 ? aDroite : tous;
       const [valeur, choix] = liste[Math.floor(Math.random() * liste.length)];
       const pays = { cle: choix.cle, valeur };
+      pays.morceaux = morceauxDuPays(pays);
+      if (pays.morceaux.length === 0) return;   // forme introuvable : on réessaiera plus tard
+      pays.ancre = calculerAncre(pays.morceaux);
+      console.info('Pays tiré : ' + valeur + ' (' + pays.morceaux.length + ' morceau(x))');
 
       dernierTirage = Date.now();
       enChargement = true;
@@ -353,7 +411,29 @@
       }
     }
 
-    // Prépare la couche orange qui colore le pays choisi
+    // Redessine le trait entre la fiche et le pays. Appelée à chaque image ("render"),
+    // le trait suit donc la rotation du globe.
+    function majLigne() {
+      const svg = document.getElementById('ligne-pays');
+      const fiche = document.getElementById('fiche-pays');
+      if (!paysChoisi || !fiche.classList.contains('est-visible')) {
+        svg.classList.remove('est-visible');
+        return;
+      }
+      const p = map.project(paysChoisi.ancre);       // position du pays à l'écran (en pixels)
+      const r = fiche.getBoundingClientRect();        // position de la fiche à l'écran
+      const depart = [r.left, r.top + 18];            // bord gauche de la fiche, à hauteur du titre
+      const coude = [r.left - 32, r.top + 18];        // petit palier horizontal, style "légende technique"
+
+      svg.querySelector('polyline').setAttribute('points',
+        p.x + ',' + p.y + ' ' + coude.join(',') + ' ' + depart.join(','));
+      const cercle = svg.querySelector('circle');     // petit cercle sur le pays
+      cercle.setAttribute('cx', p.x);
+      cercle.setAttribute('cy', p.y);
+      svg.classList.add('est-visible');
+    }
+
+    // Prépare les couches qui colorent le pays choisi, et le suivi du trait
     function preparerPaysChoisi() {
       const couches = map.getStyle().layers;
       // La couche des pays : une couche de surfaces ("fill"), de préférence nommée "countries..."
@@ -361,18 +441,27 @@
                       || couches.find(c => c.type === 'fill');
       if (!coucheFill) return;
       couchePays = coucheFill.id;
+      sourcePays = coucheFill.source;
+      sourceLayerPays = coucheFill['source-layer'];
 
-      // Nouvelle couche, même source que les pays, placée juste au-dessus d'eux
-      const premiereLigne = couches.find(c => c.type === 'line');
+      // Source GeoJSON vide au départ ; colorerPays() y mettra la forme du pays choisi
+      map.addSource('pays-choisi', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+
+      // Ajoutées sans précision de position, ces couches passent tout en haut : rien ne les recouvre
       map.addLayer({
         id: 'pays-choisi',
         type: 'fill',
-        source: coucheFill.source,
-        'source-layer': coucheFill['source-layer'],
-        filter: ['==', ['get', 'aucun'], 'aucun'],   // aucun pays au départ
-        paint: { 'fill-color': COULEUR_PAYS, 'fill-opacity': 0.85 }
-      }, premiereLigne ? premiereLigne.id : undefined);   // sous les frontières, pour les garder visibles
+        source: 'pays-choisi',
+        paint: { 'fill-color': COULEUR_PAYS, 'fill-opacity': 0.8 }
+      });
+      map.addLayer({
+        id: 'pays-choisi-contour',
+        type: 'line',
+        source: 'pays-choisi',
+        paint: { 'line-color': COULEUR_PAYS, 'line-width': 1 }
+      });
 
+      map.on('render', majLigne);          // le trait suit le globe à chaque image
       setInterval(surveillerPays, 500);
     }
 
