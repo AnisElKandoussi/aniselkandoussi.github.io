@@ -126,12 +126,23 @@
     });
 
     // ===== 3. Rotation de la Terre =====
-    const vitesseRotation = 0.1; // degrés par image
+    // La vitesse est exprimée en degrés PAR SECONDE (et non par image) :
+    // ainsi la Terre tourne à la même vitesse sur tous les écrans (60, 120, 144 images/s…).
+    // 3 degrés par seconde = un tour complet en 2 minutes.
+    const vitesseRotation = 3;
+    let instantPrecedent = null;     // moment de l'image précédente (en millisecondes)
 
-    function tourner() {
-      const centre = map.getCenter();
-      centre.lng += vitesseRotation;
-      map.setCenter(centre);
+    // requestAnimationFrame donne à la fonction l'instant actuel ("instant")
+    function tourner(instant) {
+      if (instantPrecedent !== null) {
+        // Temps écoulé depuis l'image précédente, en secondes.
+        // Limité à 0,1 s pour éviter un saut si l'onglet était en arrière-plan.
+        const ecoule = Math.min((instant - instantPrecedent) / 1000, 0.1);
+        const centre = map.getCenter();
+        centre.lng += vitesseRotation * ecoule;
+        map.setCenter(centre);
+      }
+      instantPrecedent = instant;
       requestAnimationFrame(tourner);
     }
 
@@ -142,6 +153,7 @@
     let couchePays = null;           // nom de la couche des pays dans le fond de carte
     let paysChoisi = null;           // { cle, valeur } du pays actuellement mis en avant
     let dernierTirage = -Infinity;   // moment du dernier tirage (-Infinity : jamais)
+    let enChargement = false;        // vrai pendant qu'on attend la réponse de Wikidata
 
     // Propriétés possibles pour identifier un pays, de la plus fiable à la moins fiable
     const CLES_POSSIBLES = ['ISO_A3', 'ADM0_A3', 'iso_a3', 'ADM0_ISO', 'NAME', 'name', 'ADMIN'];
@@ -263,40 +275,68 @@
       document.getElementById('fiche-pays').classList.remove('est-visible');
     }
 
-    // Tire au sort un pays parmi ceux visibles, puis le colore et affiche sa fiche.
-    // Si ses informations sont introuvables (petit territoire, par exemple),
-    // on réessaie avec un autre pays, jusqu'à 5 fois.
+    // Point représentatif d'un pays : la moyenne des sommets de son premier contour
+    function pointRepresentatif(f) {
+      const g = f.geometry;
+      const contour = g.type === 'MultiPolygon' ? g.coordinates[0][0] : g.coordinates[0];
+      const lng = contour.reduce((somme, p) => somme + p[0], 0) / contour.length;
+      const lat = contour.reduce((somme, p) => somme + p[1], 0) / contour.length;
+      return [lng, lat];
+    }
+
+    // Position horizontale d'un pays à l'écran : 0 = bord gauche, 1 = bord droit
+    function positionHorizontale(f) {
+      return map.project(pointRepresentatif(f)).x / map.getContainer().clientWidth;
+    }
+
+    // Tire au sort un pays visible, attend ses informations,
+    // puis colore le pays ET affiche la fiche en même temps.
+    // Si ses informations sont introuvables, ou s'il est sorti de l'écran pendant
+    // le chargement, on réessaie avec un autre pays (jusqu'à 5 fois).
     function tirerPays(exclus = new Set(), essai = 1) {
-      // Liste des pays visibles, sans doublons (un pays peut être découpé en plusieurs morceaux)
+      // Pays visibles, sans doublons (un pays peut être découpé en plusieurs morceaux).
+      // Pour chacun, on garde sa position la plus à droite.
       const candidats = new Map();
       paysVisibles().forEach(f => {
         const cle = trouverCle(f.properties);
-        if (cle && !exclus.has(f.properties[cle])) candidats.set(f.properties[cle], cle);
+        if (!cle || exclus.has(f.properties[cle])) return;
+        const valeur = f.properties[cle];
+        const x = positionHorizontale(f);
+        if (!candidats.has(valeur) || x > candidats.get(valeur).x) {
+          candidats.set(valeur, { cle, x });
+        }
       });
       if (candidats.size === 0) return;   // rien de chargé pour l'instant : on réessaiera
 
-      const valeurs = [...candidats.keys()];
-      const valeur = valeurs[Math.floor(Math.random() * valeurs.length)];
-      const pays = { cle: candidats.get(valeur), valeur };
+      // La Terre tourne vers la gauche : les pays entrent par la droite de l'écran.
+      // On préfère donc un pays dans la moitié droite : il restera visible plus longtemps.
+      const tous = [...candidats.entries()];
+      const aDroite = tous.filter(([, c]) => c.x > 0.5 && c.x < 0.95);
+      const liste = aDroite.length > 0 ? aDroite : tous;
+      const [valeur, choix] = liste[Math.floor(Math.random() * liste.length)];
+      const pays = { cle: choix.cle, valeur };
 
-      paysChoisi = pays;
       dernierTirage = Date.now();
-      colorerPays(pays);
+      enChargement = true;
+
+      const reessayer = raison => {
+        console.info('Pas de fiche pour ' + valeur + ' :', raison);
+        enChargement = false;
+        if (essai < 5) {
+          exclus.add(valeur);
+          tirerPays(exclus, essai + 1);    // nouvel essai avec un autre pays
+        }
+      };
 
       chercherInfos(pays)
         .then(infos => {
-          if (paysChoisi === pays) afficherFiche(infos);   // le pays est-il toujours celui choisi ?
+          if (!estVisible(pays)) return reessayer('sorti de l\'écran pendant le chargement');
+          enChargement = false;
+          paysChoisi = pays;
+          colorerPays(pays);        // couleur et fiche apparaissent au même moment
+          afficherFiche(infos);
         })
-        .catch(erreur => {
-          console.info('Pas de fiche pour ' + valeur + ' :', erreur.message);
-          if (paysChoisi !== pays) return;   // entre-temps, le pays a déjà été remplacé
-          colorerPays(null);
-          paysChoisi = null;
-          if (essai < 5) {
-            exclus.add(valeur);
-            tirerPays(exclus, essai + 1);    // nouvel essai avec un autre pays
-          }
-        });
+        .catch(erreur => reessayer(erreur.message));
     }
 
     // Vérification toutes les demi-secondes
@@ -307,8 +347,8 @@
         colorerPays(null);
         masquerFiche();
       }
-      // Aucun pays choisi et la minute est écoulée : nouveau tirage
-      if (!paysChoisi && Date.now() - dernierTirage >= DELAI_MIN) {
+      // Aucun pays choisi, aucun chargement en cours, et la minute est écoulée : nouveau tirage
+      if (!paysChoisi && !enChargement && Date.now() - dernierTirage >= DELAI_MIN) {
         tirerPays();
       }
     }
@@ -360,7 +400,7 @@
 
       // Pas de rotation si le visiteur a demandé à réduire les animations
       if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-        tourner();
+        requestAnimationFrame(tourner);   // démarre l'animation à la prochaine image
       }
     });
   </script>
