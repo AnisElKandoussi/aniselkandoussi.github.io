@@ -8,10 +8,10 @@
   --couleur-principale: #3fb68e;   /* vert éclairci pour rester lisible sur le noir */
   --couleur-accent: #e07a3f;
   --texte: #f2f2f2;          /* texte principal, presque blanc */
-  --texte-doux: #a0a0a0;     /* texte secondaire, gris clair */
-  --fond: #000000;           /* fond de la page : noir */
-  --fond-carte: #111111;     /* en-tête et cartes : gris très foncé */
-  --bordure: #2a2a2a;        /* traits fins : gris foncé */
+  --texte-doux: #a8abb0;     /* texte secondaire, gris clair */
+  --fond: #121316;           /* fond de la page : gris anthracite très foncé */
+  --fond-carte: #1b1d21;     /* en-tête et cartes : un cran plus clair que le fond */
+  --bordure: #30333a;        /* traits fins : gris foncé */
   --rayon: 10px;
   --largeur-max: 1100px;
 }
@@ -21,7 +21,7 @@
 
 body {
   margin: 0;
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-family: "Geist", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   line-height: 1.6;
   color: var(--texte);
   background: var(--fond);
@@ -57,6 +57,7 @@ code {
   text-decoration: none;
   font-weight: 600;
   transition: background 0.2s;
+  font-family: inherit;      /* les boutons utilisent aussi Geist */
 }
 .bouton:hover { background: #2f9574; }
 
@@ -166,6 +167,7 @@ code {
   color: var(--texte-doux);
   font-size: 0.9rem;
 }
+.pied__note { font-size: 0.8rem; margin-top: 0.25rem; }
 
 /* ----- Responsive (cf. cours CSS > RWD) ----- */
 @media (max-width: 600px) {

@@ -9,6 +9,12 @@
   <meta name="description" content="Portfolio de cartographie et webmapping : cartes interactives, analyses spatiales.">
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.0.0/dist/maplibre-gl.css">
   <script src="https://unpkg.com/maplibre-gl@5.0.0/dist/maplibre-gl.js"></script>
+  <!-- Bibliothèque qui calcule la position des satellites à partir de leurs paramètres orbitaux -->
+  <script src="https://cdn.jsdelivr.net/npm/satellite.js@5.0.0/dist/satellite.min.js"></script>
+  <!-- Police Geist (Google Fonts) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@100..900&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
@@ -91,11 +97,13 @@
   <footer class="pied">
     <div class="conteneur">
       <p>© 2026 Anis El Kandoussi — site hébergé sur GitHub Pages</p>
+      <p class="pied__note">En fond : positions réelles de satellites, calculées en direct à partir des données
+         <a href="https://celestrak.org" target="_blank" rel="noopener">CelesTrak</a>.</p>
     </div>
   </footer>
 
   <script>
-    // ----- Globe fond de page -----
+    // ===== 1. Créer la carte (globe en fond de page) =====
     const map = new maplibregl.Map({
       container: 'globe',
       style: 'https://demotiles.maplibre.org/style.json',
@@ -105,44 +113,120 @@
       bearing: 0,
       interactive: false
     });
-    //2. Afficher le globe en 3D
+
+    // ===== 2. Afficher la Terre en globe =====
     map.on('style.load', () => {
-      map.setProjection ({ type : 'globe'})
-    });
-    // 3. Quand la carte est chargée, on lance l'animation de rotation
-   const vitesseRotation = 0.1; // degrés par frame
-   
-  function tourner () {
-    const centre = map.getCenter();
-    centre.lng += vitesseRotation;
-    map.setCenter(centre);
-    requestAnimationFrame(tourner);
-  }
-
-  // 4. Quand la carte est chargée : couleurs, puis démarrage de l'animation
-  map.on('load', () => {
-    // On parcourt toutes les couches du fond de carte
-    // et on change leur couleur selon leur type
-    map.getStyle().layers.forEach(couche => {
-      if (couche.type === 'background') {
-        map.setPaintProperty(couche.id, 'background-color', '#0d0d0d'); // océans presque noirs : le disque reste visible
-      }
-      if (couche.type === 'fill') {
-        map.setPaintProperty(couche.id, 'fill-color', '#1f1f1f');       // pays gris foncé
-      }
-      if (couche.type === 'line') {
-        map.setPaintProperty(couche.id, 'line-color', '#3fb68e');       // traits verts
-      }
-      if (couche.type === 'symbol') {
-        map.setLayoutProperty(couche.id, 'visibility', 'none');         // cache les noms
-      }
+      map.setProjection({ type: 'globe' });
     });
 
-    // Pas de rotation si le visiteur a demandé à réduire les animations
-    if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      tourner();
+    // ===== 3. Rotation de la Terre =====
+    const vitesseRotation = 0.1; // degrés par image
+
+    function tourner() {
+      const centre = map.getCenter();
+      centre.lng += vitesseRotation;
+      map.setCenter(centre);
+      requestAnimationFrame(tourner);
     }
-  });
+
+    // ===== 4. Satellites réels =====
+    // CelesTrak publie les paramètres orbitaux (appelés "TLE") des satellites.
+    // Le groupe "stations" contient l'ISS, la station chinoise Tiangong et quelques autres.
+    const URL_TLE = 'https://celestrak.org/NORAD/elements/gp.php?GROUP=stations&FORMAT=tle';
+    const NB_SATELLITES = 15;   // peu de satellites, pour rester discret
+    let satellites = [];        // liste des satellites { nom, orbite }
+
+    // Lit le texte des TLE : 3 lignes par satellite (nom, ligne 1, ligne 2)
+    function lireTLE(texte) {
+      const lignes = texte.trim().split('\n').map(l => l.trim());
+      const liste = [];
+      for (let i = 0; i + 2 < lignes.length; i += 3) {
+        liste.push({
+          nom: lignes[i],
+          orbite: satellite.twoline2satrec(lignes[i + 1], lignes[i + 2])
+        });
+      }
+      return liste;
+    }
+
+    // Calcule la position actuelle de chaque satellite et renvoie des points GeoJSON
+    function positionsActuelles() {
+      const maintenant = new Date();
+      const tempsSideral = satellite.gstime(maintenant);
+      const points = [];
+
+      satellites.forEach(sat => {
+        const pv = satellite.propagate(sat.orbite, maintenant);
+        if (!pv.position) return;   // calcul impossible pour ce satellite : on l'ignore
+
+        const geo = satellite.eciToGeodetic(pv.position, tempsSideral);
+        points.push({
+          type: 'Feature',
+          properties: { nom: sat.nom },
+          geometry: {
+            type: 'Point',
+            coordinates: [satellite.degreesLong(geo.longitude), satellite.degreesLat(geo.latitude)]
+          }
+        });
+      });
+
+      return { type: 'FeatureCollection', features: points };
+    }
+
+    function chargerSatellites() {
+      fetch(URL_TLE)
+        .then(reponse => reponse.text())
+        .then(texte => {
+          satellites = lireTLE(texte).slice(0, NB_SATELLITES);
+
+          // Une source de données et une couche de petits points discrets
+          map.addSource('satellites', { type: 'geojson', data: positionsActuelles() });
+          map.addLayer({
+            id: 'satellites',
+            type: 'circle',
+            source: 'satellites',
+            paint: {
+              'circle-radius': 2.5,
+              'circle-color': '#3fb68e',
+              'circle-opacity': 0.9
+            }
+          });
+
+          // Mise à jour des positions toutes les secondes
+          setInterval(() => {
+            map.getSource('satellites').setData(positionsActuelles());
+          }, 1000);
+        })
+        .catch(erreur => console.warn('Satellites non chargés :', erreur));
+    }
+
+    // ===== 5. Quand la carte est chargée : couleurs, satellites, rotation =====
+    map.on('load', () => {
+      // On parcourt toutes les couches du fond de carte
+      // et on change leur couleur selon leur type
+      map.getStyle().layers.forEach(couche => {
+        if (couche.type === 'background') {
+          map.setPaintProperty(couche.id, 'background-color', '#1a1c20'); // océans, un peu plus clairs que la page
+        }
+        if (couche.type === 'fill') {
+          map.setPaintProperty(couche.id, 'fill-color', '#2b2e34');       // pays gris
+        }
+        if (couche.type === 'line') {
+          map.setPaintProperty(couche.id, 'line-color', '#3fb68e');       // traits verts
+          map.setPaintProperty(couche.id, 'line-opacity', 0.5);           // assez discrets
+        }
+        if (couche.type === 'symbol') {
+          map.setLayoutProperty(couche.id, 'visibility', 'none');         // cache les noms
+        }
+      });
+
+      chargerSatellites();
+
+      // Pas de rotation si le visiteur a demandé à réduire les animations
+      if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        tourner();
+      }
+    });
   </script>
 </body>
 </html>
