@@ -5,13 +5,13 @@
 
 /* ----- Variables : change les couleurs ici, tout le site suit ----- */
 :root {
-  --couleur-principale: #1f6f5c;   /* vert "carte topo" */
+  --couleur-principale: #3fb68e;   /* vert éclairci pour rester lisible sur le noir */
   --couleur-accent: #e07a3f;
-  --texte: #1d2522;
-  --texte-doux: #5b6661;
-  --fond: #fafaf7;
-  --fond-carte: #ffffff;
-  --bordure: #e2e4df;
+  --texte: #f2f2f2;          /* texte principal, presque blanc */
+  --texte-doux: #a0a0a0;     /* texte secondaire, gris clair */
+  --fond: #000000;           /* fond de la page : noir */
+  --fond-carte: #111111;     /* en-tête et cartes : gris très foncé */
+  --bordure: #2a2a2a;        /* traits fins : gris foncé */
   --rayon: 10px;
   --largeur-max: 1100px;
 }
@@ -34,7 +34,7 @@ a { color: var(--couleur-principale); }
 h1, h2, h3 { line-height: 1.2; }
 
 code {
-  background: #eef0ec;
+  background: var(--bordure);
   padding: 0.1em 0.35em;
   border-radius: 4px;
   font-size: 0.9em;
@@ -53,19 +53,19 @@ code {
   padding: 0.6em 1.2em;
   border-radius: var(--rayon);
   background: var(--couleur-principale);
-  color: #fff;
+  color: var(--fond);
   text-decoration: none;
   font-weight: 600;
   transition: background 0.2s;
 }
-.bouton:hover { background: #17584a; }
+.bouton:hover { background: #2f9574; }
 
 .bouton--secondaire {
   background: transparent;
   color: var(--couleur-principale);
   border: 2px solid var(--couleur-principale);
 }
-.bouton--secondaire:hover { background: #e8f2ef; }
+.bouton--secondaire:hover { background: var(--fond-carte); }
 
 /* ----- En-tête ----- */
 .entete {
@@ -129,7 +129,7 @@ code {
   aspect-ratio: 16 / 9;
   object-fit: cover;
   width: 100%;
-  background: #dde6e2;       /* couleur affichée tant qu'il n'y a pas d'image */
+  background: var(--bordure);       /* couleur affichée tant qu'il n'y a pas d'image */
 }
 
 .projet__contenu { padding: 1.2rem; display: flex; flex-direction: column; flex: 1; }
@@ -152,8 +152,9 @@ code {
   font-size: 0.8rem;
   padding: 0.15em 0.6em;
   border-radius: 999px;
-  background: #fbeee5;
-  color: #9a4a1c;
+  background: var(--fond-carte);
+  color: var(--couleur-accent);
+  border: 1px solid var(--bordure);
 }
 
 /* ----- À propos & pied de page ----- */
