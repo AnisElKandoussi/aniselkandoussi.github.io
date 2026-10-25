@@ -100,7 +100,7 @@
       container: 'globe',
       style: 'https://demotiles.maplibre.org/style.json',
       center: [0, 20],
-      zoom: 1.5,
+      zoom: 2.2,          // plus le zoom est grand, plus la Terre est grande
       pitch: 0,
       bearing: 0,
       interactive: false
@@ -119,9 +119,29 @@
     requestAnimationFrame(tourner);
   }
 
-  // 4. Démarrer l'animation
+  // 4. Quand la carte est chargée : couleurs, puis démarrage de l'animation
   map.on('load', () => {
-    tourner();
+    // On parcourt toutes les couches du fond de carte
+    // et on change leur couleur selon leur type
+    map.getStyle().layers.forEach(couche => {
+      if (couche.type === 'background') {
+        map.setPaintProperty(couche.id, 'background-color', '#0d0d0d'); // océans presque noirs : le disque reste visible
+      }
+      if (couche.type === 'fill') {
+        map.setPaintProperty(couche.id, 'fill-color', '#1f1f1f');       // pays gris foncé
+      }
+      if (couche.type === 'line') {
+        map.setPaintProperty(couche.id, 'line-color', '#3fb68e');       // traits verts
+      }
+      if (couche.type === 'symbol') {
+        map.setLayoutProperty(couche.id, 'visibility', 'none');         // cache les noms
+      }
+    });
+
+    // Pas de rotation si le visiteur a demandé à réduire les animations
+    if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      tourner();
+    }
   });
   </script>
 </body>
