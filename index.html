@@ -154,13 +154,14 @@
 
     // ===== 4. Pays mis en avant au hasard =====
     const COULEUR_PAYS = '#e07a3f';  // orange : la couleur d'accent du site
-    const DELAI_MIN = 60 * 1000;     // au moins 1 minute (en millisecondes) entre deux tirages
+    const PAUSE = 2 * 1000;          // 2 secondes entre la disparition d'un pays et le tirage du suivant
 
     let couchePays = null;           // nom de la couche des pays dans le fond de carte
     let sourcePays = null;           // source de données de cette couche
     let sourceLayerPays = null;      // et sa "sous-couche" dans les tuiles vectorielles
     let paysChoisi = null;           // { cle, valeur } du pays actuellement mis en avant
     let dernierTirage = -Infinity;   // moment du dernier tirage (-Infinity : jamais)
+    let derniereDisparition = -Infinity;  // moment où le pays précédent a quitté l'écran
     let enChargement = false;        // vrai pendant qu'on attend la réponse de Wikidata
 
     // Propriétés possibles pour identifier un pays, de la plus fiable à la moins fiable
@@ -414,9 +415,11 @@
         paysChoisi = null;
         colorerPays(null);
         masquerFiche();
+        derniereDisparition = Date.now();
       }
-      // Aucun pays choisi, aucun chargement en cours, et la minute est écoulée : nouveau tirage
-      if (!paysChoisi && !enChargement && Date.now() - dernierTirage >= DELAI_MIN) {
+      // Aucun pays choisi, aucun chargement en cours, et la courte pause est passée : nouveau tirage.
+      // Ainsi, un nouveau pays apparaît dès que le précédent est sorti de l'écran avec la rotation.
+      if (!paysChoisi && !enChargement && Date.now() - derniereDisparition >= PAUSE) {
         tirerPays();
       }
     }
@@ -462,7 +465,11 @@
         id: 'pays-choisi',
         type: 'fill',
         source: 'pays-choisi',
-        paint: { 'fill-color': COULEUR_PAYS, 'fill-opacity': 0.8 }
+        paint: {
+          'fill-color': COULEUR_PAYS,
+          'fill-opacity': 1,         // totalement opaque : on ne voit plus rien en dessous
+          'fill-antialias': false    // pas de lissage des bords : évite les fines lignes de raccord entre morceaux
+        }
       });
       map.addLayer({
         id: 'pays-choisi-contour',
@@ -481,14 +488,14 @@
       // et on change leur couleur selon leur type
       map.getStyle().layers.forEach(couche => {
         if (couche.type === 'background') {
-          map.setPaintProperty(couche.id, 'background-color', '#1a1c20'); // océans, un peu plus clairs que la page
+          map.setPaintProperty(couche.id, 'background-color', '#17181c'); // océans, à peine plus clairs que la page
         }
         if (couche.type === 'fill') {
-          map.setPaintProperty(couche.id, 'fill-color', '#2b2e34');       // pays gris
+          map.setPaintProperty(couche.id, 'fill-color', '#212328');       // pays gris foncé
         }
         if (couche.type === 'line') {
           map.setPaintProperty(couche.id, 'line-color', '#3fb68e');       // traits verts
-          map.setPaintProperty(couche.id, 'line-opacity', 0.5);           // assez discrets
+          map.setPaintProperty(couche.id, 'line-opacity', 0.3);           // discrets
         }
         if (couche.type === 'symbol') {
           map.setLayoutProperty(couche.id, 'visibility', 'none');         // cache les noms

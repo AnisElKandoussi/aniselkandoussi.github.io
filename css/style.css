@@ -255,5 +255,6 @@ code {
   position: fixed;   /* reste immobile quand on fait défiler la page */
   inset: 0;          /* colle aux 4 bords : occupe tout l'écran */
   z-index: -1;       /* passe derrière le reste du contenu */
-  opacity: 0.6;      /* rend le globe semi-transparent */
+  /* Pas d'opacité ici : la discrétion du globe vient de ses couleurs sombres (réglées dans le JavaScript).
+     Ainsi, le pays choisi garde un orange vif et opaque. */
 }
