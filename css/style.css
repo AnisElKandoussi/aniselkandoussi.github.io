@@ -169,10 +169,63 @@ code {
 }
 .pied__note { font-size: 0.8rem; margin-top: 0.25rem; }
 
+/* ----- Fiche du pays mis en avant sur le globe ----- */
+.fiche-pays {
+  position: fixed;              /* reste en bas à droite pendant le défilement */
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 5;
+  width: 260px;
+  padding: 0.9rem 1rem;
+  background: var(--fond-carte);
+  border: 1px solid var(--bordure);
+  border-left: 3px solid var(--couleur-accent);   /* rappelle la couleur du pays sur le globe */
+  border-radius: 6px;
+  font-size: 0.85rem;
+
+  /* Cachée par défaut, avec un fondu quand elle apparaît ou disparaît */
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.4s, visibility 0.4s;
+}
+.fiche-pays.est-visible {
+  opacity: 1;
+  visibility: visible;
+}
+
+.fiche-pays__entete {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.6rem;
+}
+.fiche-pays__drapeau {
+  width: 28px;
+  height: auto;
+  border-radius: 2px;
+}
+.fiche-pays__nom { font-size: 1rem; }
+
+/* Liste intitulé / valeur sur deux colonnes */
+.fiche-pays__infos {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.2rem 0.9rem;
+  margin: 0;
+}
+.fiche-pays__infos dt { color: var(--texte-doux); }
+.fiche-pays__infos dd { margin: 0; }
+
+/* Pas d'animation de fondu si le visiteur a demandé à réduire les animations */
+@media (prefers-reduced-motion: reduce) {
+  .fiche-pays { transition: none; }
+}
+
 /* ----- Responsive (cf. cours CSS > RWD) ----- */
 @media (max-width: 600px) {
   .menu { gap: 0.9rem; font-size: 0.95rem; }
   .intro { padding: 3rem 0 2rem; }
+  .fiche-pays { display: none; }   /* fiche masquée sur mobile */
 }
 
 /* ----- Globe fond de page ----- */

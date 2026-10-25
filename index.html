@@ -20,6 +20,15 @@
 <body>
   <div id="globe"></div>
 
+  <!-- Fiche du pays mis en avant sur le globe (remplie par le JavaScript en bas de page) -->
+  <aside id="fiche-pays" class="fiche-pays" aria-live="polite" aria-label="Pays mis en avant sur le globe">
+    <div class="fiche-pays__entete">
+      <img class="fiche-pays__drapeau" alt="">
+      <strong class="fiche-pays__nom"></strong>
+    </div>
+    <dl class="fiche-pays__infos"></dl>
+  </aside>
+
   <!-- ===== EN-TÊTE ===== -->
   <header class="entete">
     <div class="conteneur entete__interieur">
@@ -200,7 +209,178 @@
         .catch(erreur => console.warn('Satellites non chargés :', erreur));
     }
 
-    // ===== 5. Quand la carte est chargée : couleurs, satellites, rotation =====
+    // ===== 5. Pays mis en avant au hasard =====
+    const COULEUR_PAYS = '#e07a3f';  // orange : la couleur d'accent du site
+    const DELAI_MIN = 60 * 1000;     // au moins 1 minute (en millisecondes) entre deux tirages
+
+    let couchePays = null;           // nom de la couche des pays dans le fond de carte
+    let paysChoisi = null;           // { cle, valeur } du pays actuellement mis en avant
+    let dernierTirage = -Infinity;   // moment du dernier tirage (-Infinity : jamais)
+
+    // Propriétés possibles pour identifier un pays, de la plus fiable à la moins fiable
+    const CLES_POSSIBLES = ['ISO_A3', 'ADM0_A3', 'iso_a3', 'ADM0_ISO', 'NAME', 'name', 'ADMIN'];
+
+    // Trouve, dans les propriétés d'un pays, celle qui sert d'identifiant
+    function trouverCle(proprietes) {
+      return CLES_POSSIBLES.find(cle => proprietes[cle] && proprietes[cle] !== '-99');
+    }
+
+    // Liste des pays actuellement dessinés à l'écran.
+    // Sur un globe, MapLibre ne dessine que la face avant : un pays caché derrière n'apparaît pas.
+    function paysVisibles() {
+      return map.queryRenderedFeatures({ layers: [couchePays] });
+    }
+
+    // Le pays choisi est-il encore à l'écran ?
+    function estVisible(pays) {
+      return paysVisibles().some(f => f.properties[pays.cle] === pays.valeur);
+    }
+
+    // Colore un pays en orange (ou aucun pays si on passe null)
+    function colorerPays(pays) {
+      const filtre = pays ? ['==', ['get', pays.cle], pays.valeur] : ['==', ['get', 'aucun'], 'aucun'];
+      map.setFilter('pays-choisi', filtre);
+    }
+
+    // Formate un nombre à la française : 203 000 000 -> "203 000 000"
+    const nombre = n => n.toLocaleString('fr-FR');
+
+    // Traduit un code de langue ou de monnaie en français grâce au navigateur (Intl)
+    function enFrancais(type, code, nomAnglais) {
+      try {
+        const traduction = new Intl.DisplayNames(['fr'], { type }).of(code);
+        return traduction && traduction !== code ? traduction : nomAnglais;
+      } catch (e) {
+        return nomAnglais;   // code inconnu du navigateur : on garde le nom anglais
+      }
+    }
+
+    // Interroge l'API REST Countries à une adresse donnée
+    function demanderAPI(chemin) {
+      const champs = 'fields=name,translations,flags,capital,population,area,languages,currencies';
+      return fetch('https://restcountries.com/v3.1/' + chemin + '?' + champs)
+        .then(reponse => {
+          if (!reponse.ok) throw new Error('Pays introuvable : ' + chemin);
+          return reponse.json();
+        })
+        .then(donnees => Array.isArray(donnees) ? donnees[0] : donnees);
+    }
+
+    // Cherche d'abord par code à 3 lettres ; si ça échoue, réessaie avec le nom du pays
+    function chercherInfos(pays) {
+      const parNom = () => demanderAPI('name/' + encodeURIComponent(pays.nom));
+      if (/^[A-Z]{3}$/.test(pays.valeur)) {
+        return demanderAPI('alpha/' + pays.valeur).catch(parNom);
+      }
+      return parNom();
+    }
+
+    // Remplit et affiche la fiche
+    function afficherFiche(infos) {
+      const fiche = document.getElementById('fiche-pays');
+      const nom = infos.translations?.fra?.common || infos.name.common;
+
+      fiche.querySelector('.fiche-pays__nom').textContent = nom;
+      const drapeau = fiche.querySelector('.fiche-pays__drapeau');
+      drapeau.src = infos.flags.svg;
+      drapeau.alt = 'Drapeau : ' + nom;
+
+      const langues = Object.entries(infos.languages || {})
+        .map(([code, nomAnglais]) => enFrancais('language', code, nomAnglais));
+      const monnaies = Object.entries(infos.currencies || {})
+        .map(([code, m]) => enFrancais('currency', code, m.name));
+
+      // Chaque ligne de la fiche : [intitulé, valeur]
+      const lignes = [
+        ['Capitale', (infos.capital || ['—']).join(', ')],
+        ['Population', nombre(infos.population)],
+        ['Superficie', nombre(infos.area) + ' km²'],
+        ['Langue', langues.join(', ') || '—'],
+        ['Monnaie', monnaies.join(', ') || '—']
+      ];
+
+      // On reconstruit la liste <dl> : un <dt> (intitulé) et un <dd> (valeur) par ligne
+      const liste = fiche.querySelector('.fiche-pays__infos');
+      liste.innerHTML = '';
+      lignes.forEach(([intitule, valeur]) => {
+        const dt = document.createElement('dt');
+        const dd = document.createElement('dd');
+        dt.textContent = intitule;
+        dd.textContent = valeur;   // textContent : le texte est affiché tel quel, sans être interprété comme du HTML
+        liste.append(dt, dd);
+      });
+
+      fiche.classList.add('est-visible');
+    }
+
+    function masquerFiche() {
+      document.getElementById('fiche-pays').classList.remove('est-visible');
+    }
+
+    // Tire au sort un pays parmi ceux visibles, puis le colore et affiche sa fiche
+    function tirerPays() {
+      // Liste des pays visibles, sans doublons (un pays peut être découpé en plusieurs morceaux)
+      const candidats = new Map();
+      paysVisibles().forEach(f => {
+        const cle = trouverCle(f.properties);
+        const nom = f.properties.NAME || f.properties.name || f.properties.ADMIN || f.properties[cle];
+        if (cle) candidats.set(f.properties[cle], { cle, nom });
+      });
+      if (candidats.size === 0) return;   // rien de chargé pour l'instant : on réessaiera
+
+      const valeurs = [...candidats.keys()];
+      const valeur = valeurs[Math.floor(Math.random() * valeurs.length)];
+      const pays = { cle: candidats.get(valeur).cle, nom: candidats.get(valeur).nom, valeur };
+
+      paysChoisi = pays;
+      dernierTirage = Date.now();
+      colorerPays(pays);
+
+      chercherInfos(pays)
+        .then(infos => {
+          if (paysChoisi === pays) afficherFiche(infos);   // le pays est-il toujours celui choisi ?
+        })
+        .catch(erreur => console.warn('Fiche pays non chargée :', erreur));
+    }
+
+    // Vérification toutes les demi-secondes
+    function surveillerPays() {
+      // Le pays choisi a disparu de l'écran : on retire la couleur et la fiche
+      if (paysChoisi && !estVisible(paysChoisi)) {
+        paysChoisi = null;
+        colorerPays(null);
+        masquerFiche();
+      }
+      // Aucun pays choisi et la minute est écoulée : nouveau tirage
+      if (!paysChoisi && Date.now() - dernierTirage >= DELAI_MIN) {
+        tirerPays();
+      }
+    }
+
+    // Prépare la couche orange qui colore le pays choisi
+    function preparerPaysChoisi() {
+      const couches = map.getStyle().layers;
+      // La couche des pays : une couche de surfaces ("fill"), de préférence nommée "countries..."
+      const coucheFill = couches.find(c => c.type === 'fill' && c.id.includes('countr'))
+                      || couches.find(c => c.type === 'fill');
+      if (!coucheFill) return;
+      couchePays = coucheFill.id;
+
+      // Nouvelle couche, même source que les pays, placée juste au-dessus d'eux
+      const premiereLigne = couches.find(c => c.type === 'line');
+      map.addLayer({
+        id: 'pays-choisi',
+        type: 'fill',
+        source: coucheFill.source,
+        'source-layer': coucheFill['source-layer'],
+        filter: ['==', ['get', 'aucun'], 'aucun'],   // aucun pays au départ
+        paint: { 'fill-color': COULEUR_PAYS, 'fill-opacity': 0.85 }
+      }, premiereLigne ? premiereLigne.id : undefined);   // sous les frontières, pour les garder visibles
+
+      setInterval(surveillerPays, 500);
+    }
+
+    // ===== 6. Quand la carte est chargée : couleurs, pays, satellites, rotation =====
     map.on('load', () => {
       // On parcourt toutes les couches du fond de carte
       // et on change leur couleur selon leur type
@@ -220,6 +400,7 @@
         }
       });
 
+      preparerPaysChoisi();
       chargerSatellites();
 
       // Pas de rotation si le visiteur a demandé à réduire les animations
